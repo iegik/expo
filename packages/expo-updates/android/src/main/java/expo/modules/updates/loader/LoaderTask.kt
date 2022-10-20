@@ -9,6 +9,8 @@ import expo.modules.updates.UpdatesConfiguration
 import expo.modules.updates.UpdatesUtils
 import expo.modules.updates.db.DatabaseHolder
 import expo.modules.updates.db.Reaper
+import expo.modules.updates.db.UpdatesDatabase
+import expo.modules.updates.db.dao.UpdateDao
 import expo.modules.updates.db.entity.AssetEntity
 import expo.modules.updates.db.entity.UpdateEntity
 import expo.modules.updates.launcher.DatabaseLauncher
@@ -63,7 +65,7 @@ class LoaderTask(
      * LoaderTask proceed as usual.
      */
     fun onCachedUpdateLoaded(update: UpdateEntity): Boolean
-    fun onRemoteUpdateManifestLoaded(updateManifest: UpdateManifest)
+    fun onRemoteUpdateResponseLoaded(updateResponse: UpdateResponse)
     fun onSuccess(launcher: Launcher, isUpToDate: Boolean)
     fun onBackgroundUpdateFinished(
       status: BackgroundUpdateStatus,
@@ -258,30 +260,29 @@ class LoaderTask(
       val launchableUpdate = launcher.getLaunchableUpdate(database, context)
       val manifestFilters = ManifestMetadata.getManifestFilters(database, configuration)
       if (selectionPolicy.shouldLoadNewUpdate(embeddedUpdate, launchableUpdate, manifestFilters)) {
-        EmbeddedLoader(context, configuration, database, directory).start(object :
-            LoaderCallback {
-            override fun onFailure(e: Exception) {
-              Log.e(TAG, "Unexpected error copying embedded update", e)
-              launcher.launch(database, context, launcherCallback)
-            }
+        EmbeddedLoader(context, configuration, database, directory).start(object : LoaderCallback {
+          override fun onFailure(e: Exception) {
+            Log.e(TAG, "Unexpected error copying embedded update", e)
+            launcher.launch(database, context, launcherCallback)
+          }
 
-            override fun onSuccess(update: UpdateEntity?) {
-              launcher.launch(database, context, launcherCallback)
-            }
+          override fun onSuccess(loaderResult: Loader.LoaderResult) {
+            launcher.launch(database, context, launcherCallback)
+          }
 
-            override fun onAssetLoaded(
-              asset: AssetEntity,
-              successfulAssetCount: Int,
-              failedAssetCount: Int,
-              totalAssetCount: Int
-            ) {
-              // do nothing
-            }
+          override fun onAssetLoaded(
+            asset: AssetEntity,
+            successfulAssetCount: Int,
+            failedAssetCount: Int,
+            totalAssetCount: Int
+          ) {
+            // do nothing
+          }
 
-            override fun onUpdateManifestLoaded(updateManifest: UpdateManifest): Boolean {
-              return true
-            }
-          })
+          override fun onUpdateResponseLoaded(updateResponse: UpdateResponse): Boolean {
+            return true
+          }
+        })
       } else {
         launcher.launch(database, context, launcherCallback)
       }
@@ -310,7 +311,23 @@ class LoaderTask(
           ) {
           }
 
-          override fun onUpdateManifestLoaded(updateManifest: UpdateManifest): Boolean {
+          override fun onUpdateResponseLoaded(updateResponse: UpdateResponse): Boolean {
+            if (updateResponse.messageUpdateResponsePart?.updateMessage is UpdateMessage.RollbackToEmbeddedUpdateMessage) {
+              isUpToDate = false
+              return false
+            }
+
+            if (updateResponse.messageUpdateResponsePart?.updateMessage is UpdateMessage.NoUpdateAvailableUpdateMessage) {
+              isUpToDate = true
+              return false
+            }
+
+            val updateManifest = updateResponse.manifestUpdateResponsePart?.updateManifest
+            if (updateManifest == null) {
+              isUpToDate = true
+              return false
+            }
+
             return if (selectionPolicy.shouldLoadNewUpdate(
                 updateManifest.updateEntity,
                 candidateLauncher?.launchedUpdate,
@@ -318,7 +335,7 @@ class LoaderTask(
               )
             ) {
               isUpToDate = false
-              callback.onRemoteUpdateManifestLoaded(updateManifest)
+              callback.onRemoteUpdateResponseLoaded(updateResponse)
               true
             } else {
               isUpToDate = true
@@ -326,9 +343,25 @@ class LoaderTask(
             }
           }
 
-          override fun onSuccess(update: UpdateEntity?) {
-            // a new update has loaded successfully; we need to launch it with a new Launcher and
-            // replace the old Launcher so that the callback fires with the new one
+          override fun onSuccess(loaderResult: Loader.LoaderResult) {
+            var updateEntity = loaderResult.updateEntity
+            val updateMessage = loaderResult.updateMessage
+
+            // If message is to roll-back to the embedded update and there is an embedded update,
+            // we need to update embedded update in the DB with the newer commitTime from the message so that
+            // the selection policy will choose it. That way future updates can continue to be applied
+            // over this rollback, but older ones won't.
+            // The embedded update is guaranteed to be in the DB from the earlier [EmbeddedLoader] call in this task.
+            if (updateMessage != null && updateMessage is UpdateMessage.RollbackToEmbeddedUpdateMessage && configuration.hasEmbeddedUpdate) {
+              val embeddedUpdate = EmbeddedManifest.get(context, configuration)!!.updateEntity
+              database.updateDao().setUpdateCommitTime(embeddedUpdate!!, updateMessage.commitTime)
+              updateEntity = embeddedUpdate
+            }
+
+            // TODO(wschurman): I think this will launch the embedded update below?
+
+            // a new update (or null update because onUpdateResponseLoaded returned false or it was just a message) has loaded successfully;
+            // we need to launch it with a new Launcher and replace the old Launcher so that the callback fires with the new one
             val newLauncher = DatabaseLauncher(configuration, directory, fileDownloader, selectionPolicy)
             newLauncher.launch(
               database, context,
@@ -350,7 +383,7 @@ class LoaderTask(
                   }
                   remoteUpdateCallback.onSuccess()
                   if (hasLaunchedSynchronized) {
-                    if (update == null) {
+                    if (updateEntity == null) {
                       callback.onBackgroundUpdateFinished(
                         BackgroundUpdateStatus.NO_UPDATE_AVAILABLE,
                         null,
@@ -359,7 +392,7 @@ class LoaderTask(
                     } else {
                       callback.onBackgroundUpdateFinished(
                         BackgroundUpdateStatus.UPDATE_AVAILABLE,
-                        update,
+                        updateEntity,
                         null
                       )
                     }

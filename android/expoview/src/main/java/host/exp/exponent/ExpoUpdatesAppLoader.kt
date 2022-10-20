@@ -22,6 +22,7 @@ import expo.modules.manifests.core.Manifest
 import expo.modules.updates.codesigning.CODE_SIGNING_METADATA_ALGORITHM_KEY
 import expo.modules.updates.codesigning.CODE_SIGNING_METADATA_KEY_ID_KEY
 import expo.modules.updates.codesigning.CodeSigningAlgorithm
+import expo.modules.updates.loader.UpdateResponse
 import expo.modules.updates.manifest.EmbeddedManifest
 import expo.modules.updates.selectionpolicy.LauncherSelectionPolicyFilterAware
 import expo.modules.updates.selectionpolicy.LoaderSelectionPolicyFilterAware
@@ -249,7 +250,10 @@ class ExpoUpdatesAppLoader @JvmOverloads constructor(
           return true
         }
 
-        override fun onRemoteUpdateManifestLoaded(updateManifest: UpdateManifest) {
+        override fun onRemoteUpdateResponseLoaded(updateResponse: UpdateResponse) {
+          // TODO(wschurman): this is probably wrong
+          val updateManifest = updateResponse.manifestUpdateResponsePart?.updateManifest ?: return
+
           // expo-cli does not always respect our SDK version headers and respond with a compatible update or an error
           // so we need to check the compatibility here
           val sdkVersion = updateManifest.manifest.getSDKVersion()

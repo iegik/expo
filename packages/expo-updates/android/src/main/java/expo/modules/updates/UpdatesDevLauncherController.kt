@@ -7,6 +7,8 @@ import expo.modules.updates.launcher.DatabaseLauncher
 import expo.modules.updates.launcher.Launcher.LauncherCallback
 import expo.modules.updates.loader.Loader
 import expo.modules.updates.loader.RemoteLoader
+import expo.modules.updates.loader.UpdateMessage
+import expo.modules.updates.loader.UpdateResponse
 import expo.modules.updates.manifest.UpdateManifest
 import expo.modules.updates.selectionpolicy.LauncherSelectionPolicySingleUpdate
 import expo.modules.updates.selectionpolicy.ReaperSelectionPolicyDevelopmentClient
@@ -73,13 +75,14 @@ class UpdatesDevLauncherController : UpdatesInterface {
         callback.onFailure(e)
       }
 
-      override fun onSuccess(update: UpdateEntity?) {
+      override fun onSuccess(loaderResult: Loader.LoaderResult) {
+        // TODO(wschurman): this is probably wrong
         databaseHolder.releaseDatabase()
-        if (update == null) {
+        if (loaderResult.updateEntity == null) {
           callback.onSuccess(null)
           return
         }
-        launchUpdate(update, updatesConfiguration, context, callback)
+        launchUpdate(loaderResult.updateEntity, updatesConfiguration, context, callback)
       }
 
       override fun onAssetLoaded(
@@ -91,7 +94,17 @@ class UpdatesDevLauncherController : UpdatesInterface {
         callback.onProgress(successfulAssetCount, failedAssetCount, totalAssetCount)
       }
 
-      override fun onUpdateManifestLoaded(updateManifest: UpdateManifest): Boolean {
+      override fun onUpdateResponseLoaded(updateResponse: UpdateResponse): Boolean {
+        // TODO(wschurman): this is probably wrong
+        if (updateResponse.messageUpdateResponsePart?.updateMessage is UpdateMessage.RollbackToEmbeddedUpdateMessage) {
+          return false
+        }
+
+        if (updateResponse.messageUpdateResponsePart?.updateMessage is UpdateMessage.NoUpdateAvailableUpdateMessage) {
+          return false
+        }
+
+        val updateManifest = updateResponse.manifestUpdateResponsePart?.updateManifest ?: return false
         return callback.onManifestLoaded(updateManifest.manifest.getRawJson())
       }
     })
