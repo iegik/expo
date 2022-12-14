@@ -345,7 +345,6 @@ export class WebpackBundlerDevServer extends BundlerDevServer {
       mode: options.mode,
       https: options.https,
     };
-    setMode(env.mode ?? 'development');
     // Check if the project has a webpack.config.js in the root.
     const projectWebpackConfig = this.getProjectConfigFilePath();
     let config: WebpackConfiguration;
@@ -383,11 +382,6 @@ export class WebpackBundlerDevServer extends BundlerDevServer {
       Log.error(`Could not clear ${mode} web cache directory: ${error.message}`);
     }
   }
-}
-
-function setMode(mode: 'development' | 'production' | 'test' | 'none'): void {
-  process.env.BABEL_ENV = mode;
-  process.env.NODE_ENV = mode;
 }
 
 export function getProjectWebpackConfigFilePath(projectRoot: string) {
